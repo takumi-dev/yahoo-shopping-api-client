@@ -41,6 +41,27 @@ class OrderTest extends AbstractTestCase
     }
 
     /**
+     * 注文ステータス別件数参照APIテスト - 公開鍵認証
+     *
+     * @return void
+     */
+    public function testOrderCountWithPublicKey(): void
+    {
+        $client = new OrderCountClient($_ENV['TEST_ACCESS_TOKEN']);
+        $client->setPublicKey($_ENV['TEST_SELLER_ID'], $_ENV['TEST_PUBLIC_KEY']);
+        $count  = $client->request([
+            'sellerId' => $_ENV['TEST_SELLER_ID'],
+        ]);
+
+        // 成功したか
+        $this->assertNotEmpty($count);
+        // 件数は正しいか
+        $this->assertSame(1, (int)$count['NewOrder']);      // 新規注文
+        $this->assertSame(1, (int)$count['NewReserve']);    // 新規予約
+        $this->assertSame(0, (int)$count['Holding']);       // 保留
+    }
+
+    /**
      * 注文検索APIテスト
      *
      * @return void

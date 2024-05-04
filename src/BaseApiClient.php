@@ -5,6 +5,7 @@ namespace JSPSystem\YahooShoppingApiClient;
 use CurlHandle;
 use SimpleXMLElement;
 use JSPSystem\YahooShoppingApiClient\Exception\ApiException;
+use JSPSystem\YahooShoppingApiClient\Exception\PublicKeyException;
 use JSPSystem\YahooShoppingApiClient\Exception\TokenException;
 
 /**
@@ -22,6 +23,9 @@ abstract class BaseApiClient
 
     private CurlHandle $ch;
     private string $content_type;
+    private string $public_key;
+    private ?string $key_version;
+    private string $seller_id;
 
     /**
      * レスポンスヘッダー
@@ -279,6 +283,20 @@ abstract class BaseApiClient
         if (!empty($this->access_token)) {
             $headers[] = "Authorization: Bearer {$this->access_token}";
         }
+        if (!empty($this->seller_id) && !empty($this->public_key)) {
+            // 認証情報作成(ストアアカウントとunixtimestampを:で結合する)
+            $authenticationValue = $this->seller_id . ":" . time();
+            $publicKey = openssl_pkey_get_public($this->public_key);
+ 
+            // 認証情報の暗号化実行
+            openssl_public_encrypt($authenticationValue, $encryptedAuthenticationValue, $publicKey);
+            
+            // 認証情報のBase64エンコード実行
+            $encodedAuthenticationValue = base64_encode($encryptedAuthenticationValue);
+
+            $headers[] = "X-sws-signature: ".$encodedAuthenticationValue;
+            $headers[] = "X-sws-signature-version: ".($this->key_version ?? '1');
+        }
         curl_setopt($this->ch, CURLOPT_HTTPHEADER, $headers);
 
         // 証明書・秘密鍵
@@ -288,6 +306,13 @@ abstract class BaseApiClient
         if (!empty($this->ssl_key)) {
             curl_setopt($this->ch, CURLOPT_SSLKEY, $this->ssl_key);
         }
+    }
+
+    public function setPublicKey(string $seller_id, string $public_key, ?string $key_version = null): void
+    {
+        $this->seller_id = $seller_id;
+        $this->public_key = $public_key;
+        $this->key_version = $key_version;
     }
 
     /**
@@ -364,6 +389,8 @@ abstract class BaseApiClient
         $this->extractResponse($result, $info);
         // WebAPIの認証エラーかどうか
         $this->checkAuthError();
+        // 公開鍵認証エラーかどうか
+        $this->checkPublicKeyError();
         // レスポンスを配列へパース
         return $this->parseResponseToArray();
     }
@@ -430,4 +457,25 @@ abstract class BaseApiClient
         throw new TokenException($head);
     }
 
+    /**
+     * レスポンスヘッダーから公開鍵で認証エラーが発生したか調べます。
+     *
+     * @return void
+     */
+    private function checkPublicKeyError(): void
+    {
+        // 公開鍵認証エラーはX-SWS-Authorize-Statusヘッダーで返される
+        $key  = 'X-SWS-Authorize-Status';
+        $head = array_key_exists($key, $this->headers) ? $this->headers[$key] : null;
+        // X-SWS-Authorize-Statusヘッダーが無い or 値がNULLであれば使用していない
+        if (null === $head) {
+            return;
+        }
+        // X-SWS-Authorize-Statusヘッダーがauthorizedなら成功
+        if ('authorized' === $head) {
+            return;
+        }
+        // X-SWS-Authorize-Statusヘッダーがあり、値が入っていればエラー
+        throw new PublicKeyException($head);
+    }
 }
